@@ -1,0 +1,78 @@
+# https://goreleaser.com
+version: 2
+
+project_name: marker-cli
+
+before:
+  hooks:
+    # Completions are shell scripts, not platform-specific, so generating them
+    # once on the host and shipping them in every archive is enough.
+    - make completions
+
+builds:
+  - id: marker-cli
+    main: .
+    binary: marker-cli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/l3-n0x/marker-cli/internal/cmd.version=v{{ .Version }}
+
+archives:
+  - name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macOS{{ else }}{{ .Os }}{{ end }}_{{ .Arch }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+      - src: completions/*
+        dst: completions
+        strip_parent: true
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  footer: |
+    ## Install
+
+    **macOS / Linux** — download the archive for your platform, then:
+
+    ```sh
+    tar xzf marker-cli_*.tar.gz
+    sudo install -Dm755 marker-cli /usr/local/bin/marker-cli
+    ```
+
+    On macOS, Gatekeeper blocks unsigned binaries on first run:
+    `xattr -d com.apple.quarantine /usr/local/bin/marker-cli`
+
+    **Windows** — unzip and put `marker-cli.exe` somewhere on your `PATH`.
+
+    **Arch Linux** — `packaging/arch/marker-cli` in the repo, or the AUR.
+
+    Then run `marker-cli login` once to store your Mistral API key.

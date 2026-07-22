@@ -9,6 +9,48 @@ the Obsidian dependency.
 
 ## Install
 
+### Download a binary
+
+Grab the archive for your platform from the
+[latest release](https://github.com/L3-N0X/marker-cli/releases/latest) —
+Linux, macOS and Windows, Intel and ARM. Each archive contains the binary and
+shell completions.
+
+**macOS / Linux**
+
+```sh
+tar xzf marker-cli_*.tar.gz
+sudo install -Dm755 marker-cli /usr/local/bin/marker-cli
+```
+
+macOS blocks unsigned binaries the first time they run; clear the quarantine
+flag with `xattr -d com.apple.quarantine /usr/local/bin/marker-cli`.
+
+**Windows** — unzip and put `marker-cli.exe` anywhere on your `PATH`.
+
+### Arch Linux
+
+```sh
+git clone https://github.com/L3-N0X/marker-cli
+cd marker-cli/packaging/arch/marker-cli-git   # or marker-cli for a tagged release
+makepkg -si
+```
+
+### Any Linux / macOS
+
+Needs Go 1.26 or newer:
+
+```sh
+make
+sudo make install              # /usr/local by default
+make PREFIX=~/.local install   # or somewhere in your home
+```
+
+This installs the binary plus bash, zsh and fish completions.
+`sudo make uninstall` removes them again.
+
+### Just the binary
+
 ```sh
 go build -o marker-cli .
 ```
@@ -116,7 +158,15 @@ line logging on stderr, leaving stdout clean.
 ## Development
 
 ```sh
-go build ./... && go vet ./... && go test ./...
+make check      # go vet ./... && go test ./...
+make snapshot   # build every release archive into dist/, publishing nothing
+```
+
+Releases are cut by pushing a tag — GoReleaser builds and uploads the
+cross-platform archives from GitHub Actions:
+
+```sh
+git tag -a v0.1.0 -m "v0.1.0" && git push origin v0.1.0
 ```
 
 Layout:
@@ -130,6 +180,8 @@ Layout:
 | `internal/secrets` | OS keyring access |
 | `internal/config` | Persisted non-secret defaults |
 | `internal/tui` | Bubble Tea login and progress views |
+| `packaging/arch` | PKGBUILDs for the AUR (`marker-cli`, `marker-cli-git`) |
+| `.goreleaser.yaml` | Cross-platform release build |
 
 Adding another backend (Datalab, self-hosted Marker, the Python API) means
 implementing `converter.Converter` and adding an entry to `providers` in

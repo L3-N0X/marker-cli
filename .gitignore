@@ -5,3 +5,6 @@
 # go
 *.test
 *.out
+
+# generated completions
+/completions/
