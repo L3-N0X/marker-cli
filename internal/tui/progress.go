@@ -45,27 +45,42 @@ type progressModel struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	cancelled bool
+
+	// standalone is true when the model drives its own program, as opposed to
+	// being embedded in the `start` browser. It decides whether finishing
+	// quits or just reports back to the parent.
+	standalone bool
+	finished   bool
 }
 
-// RunConversions shows a live progress view while run converts each named job
-// in turn, and returns every job's outcome.
-func RunConversions(ctx context.Context, names []string, run Runner) ([]JobResult, error) {
+// allDoneMsg says every job has finished; only sent to an embedded model.
+type allDoneMsg struct{}
+
+// newProgressModel builds the conversion view for the named jobs.
+func newProgressModel(ctx context.Context, names []string, run Runner) progressModel {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = titleStyle
 
-	m := progressModel{
+	return progressModel{
 		names:   names,
 		run:     run,
 		current: -1,
 		spinner: sp,
-		bar:     progress.New(progress.WithWidth(40)),
+		bar:     newProgressBar(40),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
+}
+
+// RunConversions shows a live progress view while run converts each named job
+// in turn, and returns every job's outcome.
+func RunConversions(ctx context.Context, names []string, run Runner) ([]JobResult, error) {
+	m := newProgressModel(ctx, names, run)
+	m.standalone = true
+	defer m.cancel()
 
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
@@ -86,18 +101,34 @@ func (m progressModel) Init() tea.Cmd {
 }
 
 func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	return next, cmd
+}
+
+// update is the real update loop. It returns the concrete type so the `start`
+// browser can embed this model as a field.
+func (m progressModel) update(msg tea.Msg) (progressModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// When embedded, the parent owns the keyboard.
+		if !m.standalone {
+			break
+		}
 		if s := msg.String(); s == "ctrl+c" || s == "esc" {
-			m.cancelled = true
-			m.cancel()
-			return m, tea.Quit
+			return m.stop(), tea.Quit
 		}
 
 	case startJobMsg:
 		m.current++
-		if m.current >= len(m.names) {
-			return m, tea.Quit
+		// A cancelled run stops where it is instead of failing every job
+		// that is left against a dead context.
+		if m.current >= len(m.names) || m.cancelled {
+			m.finished = true
+			m.cancel()
+			if m.standalone {
+				return m, tea.Quit
+			}
+			return m, func() tea.Msg { return allDoneMsg{} }
 		}
 		m.stage, m.detail, m.pct = "", "", 0
 		m.progress = make(chan converter.Progress)
@@ -132,7 +163,18 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// stop cancels the in-flight conversion and marks the run as abandoned.
+func (m progressModel) stop() progressModel {
+	m.cancelled = true
+	m.cancel()
+	return m
+}
+
 func (m progressModel) View() tea.View {
+	return tea.NewView(m.render())
+}
+
+func (m progressModel) render() string {
 	var b strings.Builder
 
 	for _, r := range m.results {
@@ -159,7 +201,7 @@ func (m progressModel) View() tea.View {
 		fmt.Fprintf(&b, "\n%s\n", helpStyle.Render("esc to cancel"))
 	}
 
-	return tea.NewView(b.String())
+	return b.String()
 }
 
 type startJobMsg struct{}

@@ -113,30 +113,13 @@ func runConvert(cmd *cobra.Command, f *convertFlags) error {
 		}
 	}
 
-	// One unit of work: convert inputs[i] and write it out.
-	run := func(ctx context.Context, i int, progress chan<- converter.Progress) (string, error) {
-		req := converter.Request{
-			Path:         inputs[i],
-			Extract:      extract,
-			Paginate:     f.paginate,
-			ImageLimit:   f.imageLimit,
-			ImageMinSize: f.imageMinSize,
-			DeleteRemote: f.deleteRemote,
-		}
-		res, err := conv.Convert(ctx, req, progress)
-		if err != nil {
-			return "", err
-		}
-		written, err := output.Write(inputs[i], res, opts)
-		if err != nil {
-			return "", err
-		}
-		summary := written.MarkdownPath
-		if n := len(written.ImagePaths); n > 0 {
-			summary += fmt.Sprintf(" (+%d images)", n)
-		}
-		return summary, nil
-	}
+	run := makeRunner(conv, inputs, converter.Request{
+		Extract:      extract,
+		Paginate:     f.paginate,
+		ImageLimit:   f.imageLimit,
+		ImageMinSize: f.imageMinSize,
+		DeleteRemote: f.deleteRemote,
+	}, opts)
 
 	names := make([]string, len(inputs))
 	for i, in := range inputs {
@@ -171,6 +154,29 @@ func runConvert(cmd *cobra.Command, f *convertFlags) error {
 		return errors.New("cancelled")
 	}
 	return nil
+}
+
+// makeRunner builds the unit of work the progress view drives: convert
+// inputs[i] with the shared request template, then write it out.
+func makeRunner(conv converter.Converter, inputs []string, req converter.Request, opts output.Options) tui.Runner {
+	return func(ctx context.Context, i int, progress chan<- converter.Progress) (string, error) {
+		r := req
+		r.Path = inputs[i]
+
+		res, err := conv.Convert(ctx, r, progress)
+		if err != nil {
+			return "", err
+		}
+		written, err := output.Write(inputs[i], res, opts)
+		if err != nil {
+			return "", err
+		}
+		summary := written.MarkdownPath
+		if n := len(written.ImagePaths); n > 0 {
+			summary += fmt.Sprintf(" (+%d images)", n)
+		}
+		return summary, nil
+	}
 }
 
 // runPlain is the non-interactive path: plain lines on stderr, so stdout stays

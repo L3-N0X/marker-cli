@@ -64,11 +64,56 @@ operating system's keyring — never in a config file:
 marker-cli login
 ```
 
-Then convert:
+Then just run it:
+
+```sh
+marker-cli
+```
+
+That opens the interactive browser (see below). If you would rather stay on
+the command line:
 
 ```sh
 marker-cli convert -i paper.pdf -o notes/
 ```
+
+## Interactive mode
+
+```sh
+marker-cli start            # browse the current directory
+marker-cli start ~/Downloads
+```
+
+`start` (also what a bare `marker-cli` runs in a terminal) is a full-screen,
+two-pane browser: PDFs on the left, conversion settings on the right.
+
+```
+╭─ FILES ───────────────────────────╮╭─ SETTINGS ──────────────╮
+│ ❯ [✓] paper.pdf   1.2 MB  exists  ││     extract        all  │
+│   [ ] thesis.pdf  4.8 MB          ││   ✓ assets-subfolder    │
+│       archive/                    ││   ✗ metadata            │
+╰───────────────────────────────────╯╰─────────────────────────╯
+```
+
+| Key | Does |
+| --- | ---- |
+| `↑` `↓` (or `k` `j`) | move the cursor |
+| `space` | select / deselect the PDF under the cursor |
+| `enter` | convert the selection here — or open the folder under the cursor |
+| `f` | ask for a folder name first, then convert into it |
+| `tab` | switch between the file list and the settings |
+| `←` `→` | change the setting under the cursor |
+| `s` | save the current settings as your defaults |
+| `/` | filter the listing · `a` select all · `c` clear · `r` reload |
+| `backspace` | go up a directory |
+| `esc` | cancel a running conversion · `q` quit |
+
+With nothing selected, `enter` converts whatever the cursor is on, so the
+common case is two keystrokes. Files whose Markdown already exists are marked
+`exists`; turn on the `force` setting to overwrite them.
+
+Settings changed here apply to the session immediately. Press `s` to persist
+them to the same config file `marker-cli config set` writes.
 
 ## Usage
 
@@ -146,9 +191,10 @@ key itself.
 
 ## Interactive bits
 
-Two things are interactive, and both fall back to plain output when stdout is
-not a terminal:
+These are interactive, and all fall back to plain output when stdout is not a
+terminal:
 
+- `marker-cli start` — the two-pane file browser described above.
 - `marker-cli login` — masked key entry with live validation before saving.
 - `marker-cli convert` — a spinner and progress bar per file.
 
@@ -179,7 +225,7 @@ Layout:
 | `internal/output` | Turning a result into files on disk |
 | `internal/secrets` | OS keyring access |
 | `internal/config` | Persisted non-secret defaults |
-| `internal/tui` | Bubble Tea login and progress views |
+| `internal/tui` | Bubble Tea views: file browser, login, progress |
 | `packaging/arch` | PKGBUILDs for the AUR (`marker-cli`, `marker-cli-git`) |
 | `.goreleaser.yaml` | Cross-platform release build |
 

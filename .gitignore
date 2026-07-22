@@ -15,3 +15,6 @@ packaging/arch/*/pkg/
 packaging/arch/*/marker-cli/
 packaging/arch/*/*.tar.gz
 packaging/arch/*/*.pkg.tar.*
+
+# internal docs
+RELEASE.md

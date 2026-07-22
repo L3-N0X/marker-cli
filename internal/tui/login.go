@@ -51,6 +51,7 @@ func RunLogin(provider, keyURL string, validate Validator) (bool, error) {
 	ti.EchoCharacter = '•'
 	ti.CharLimit = 256
 	ti.SetWidth(48)
+	styleInput(&ti)
 	ti.Focus()
 
 	sp := spinner.New()
