@@ -13,8 +13,8 @@ optdepends=(
   'kwallet: Secret Service backend for storing the API key'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# Run `updpkgsums` after tagging a release to fill this in.
-sha256sums=('SKIP')
+# Run `updpkgsums` after tagging a new release to refresh this.
+sha256sums=('d735765edb4b7552adb39239ba83fc89a7a0e9f742fbe233822065da11ec04de')
 
 prepare() {
   cd "$pkgname-$pkgver"
