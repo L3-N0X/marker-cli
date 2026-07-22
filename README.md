@@ -30,9 +30,20 @@ flag with `xattr -d com.apple.quarantine /usr/local/bin/marker-cli`.
 
 ### Arch Linux
 
+Available on the AUR as
+[`marker-cli`](https://aur.archlinux.org/packages/marker-cli) (latest tagged
+release) and [`marker-cli-git`](https://aur.archlinux.org/packages/marker-cli-git)
+(builds from `main`):
+
 ```sh
-git clone https://github.com/L3-N0X/marker-cli
-cd marker-cli/packaging/arch/marker-cli-git   # or marker-cli for a tagged release
+yay -S marker-cli   # or: paru -S marker-cli
+```
+
+Without an AUR helper:
+
+```sh
+git clone https://aur.archlinux.org/marker-cli.git
+cd marker-cli
 makepkg -si
 ```
 
