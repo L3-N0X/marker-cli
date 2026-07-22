@@ -1,0 +1,7 @@
+# build output
+/marker-cli
+/dist/
+
+# go
+*.test
+*.out
