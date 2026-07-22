@@ -1,6 +1,6 @@
 # Maintainer: L3-N0X <leon.goett@web.de>
 pkgname=marker-cli
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Convert PDFs to Markdown from the terminal using MistralAI OCR"
 arch=('x86_64' 'aarch64')
@@ -14,7 +14,7 @@ optdepends=(
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # Run `updpkgsums` after tagging a new release to refresh this.
-sha256sums=('d735765edb4b7552adb39239ba83fc89a7a0e9f742fbe233822065da11ec04de')
+sha256sums=('3babc11c236b3bd61179099d6c701b55536de5203c72e36cbdeebda0cd109457')
 
 prepare() {
   cd "$pkgname-$pkgver"

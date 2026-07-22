@@ -1,7 +1,7 @@
 # Maintainer: L3-N0X <leon.goett@web.de>
 pkgname=marker-cli-git
 _pkgname=marker-cli
-pkgver=r1.48bc4bc
+pkgver=0.2.0.r0.geba349c
 pkgrel=1
 pkgdesc="Convert PDFs to Markdown from the terminal using MistralAI OCR (git)"
 arch=('x86_64' 'aarch64')
