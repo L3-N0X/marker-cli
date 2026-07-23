@@ -70,8 +70,9 @@ type startModel struct {
 
 	st    startState
 	cfg   config.Config
-	force bool // session-only: overwrite existing markdown
-	dirty bool // config changed since the last save
+	saved config.Config // last-saved snapshot, for the unsaved marker
+	force bool          // session-only: overwrite existing markdown
+	dirty bool          // config differs from the saved snapshot
 
 	dir      string
 	entries  []fileEntry
@@ -136,6 +137,7 @@ func newStartModel(ctx context.Context, opts StartOptions) (startModel, error) {
 		opts:       opts,
 		ctx:        ctx,
 		cfg:        opts.Config,
+		saved:      opts.Config,
 		dir:        dir,
 		filter:     filter,
 		folder:     folder,
@@ -382,12 +384,17 @@ func (m startModel) configKey(key string) (tea.Model, tea.Cmd) {
 			m.fail(err.Error())
 			return m, nil
 		}
+		m.saved = m.cfg
 		m.dirty = false
 		m.note("saved as defaults")
 	case "R":
 		m.cfg = config.Default()
-		m.dirty = true
-		m.note("reset to built-in defaults (press s to save)")
+		m.recomputeDirty()
+		if m.dirty {
+			m.note("reset to built-in defaults (press s to save)")
+		} else {
+			m.note("reset to built-in defaults")
+		}
 	}
 	return m, nil
 }
@@ -867,8 +874,40 @@ func (m *startModel) setOptionValue(spec optionSpec, v string) {
 		m.force = b
 	}
 	if !spec.session {
-		m.dirty = true
+		m.recomputeDirty()
 	}
+}
+
+// recomputeDirty marks the config unsaved only when it actually differs from
+// the last-saved snapshot, so toggling a setting and then toggling it back —
+// or re-selecting the value it already had — clears the marker instead of
+// leaving a stale "press s to save".
+func (m *startModel) recomputeDirty() {
+	m.dirty = !settingsEqual(m.cfg, m.saved)
+}
+
+// settingsEqual compares the persisted settings of two configs, ignoring the
+// Configured map (which the panel never edits and which makes Config itself
+// non-comparable).
+func settingsEqual(a, b config.Config) bool {
+	return a.Provider == b.Provider &&
+		a.Extract == b.Extract &&
+		a.AssetsSubfolder == b.AssetsSubfolder &&
+		a.Metadata == b.Metadata &&
+		a.MovePDF == b.MovePDF &&
+		a.DeleteOriginal == b.DeleteOriginal &&
+		a.MarkerEndpoint == b.MarkerEndpoint &&
+		a.PythonEndpoint == b.PythonEndpoint &&
+		a.Paginate == b.Paginate &&
+		a.Langs == b.Langs &&
+		a.ForceOCR == b.ForceOCR &&
+		a.MaxPages == b.MaxPages &&
+		a.StripExistingOCR == b.StripExistingOCR &&
+		a.UseLLM == b.UseLLM &&
+		a.SkipCache == b.SkipCache &&
+		a.ImageLimit == b.ImageLimit &&
+		a.ImageMinSize == b.ImageMinSize &&
+		a.DeleteRemote == b.DeleteRemote
 }
 
 // adjustOption steps the option under the config cursor by n. Booleans and

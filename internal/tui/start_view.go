@@ -168,28 +168,50 @@ func (m startModel) configPanel() string {
 	_, w := m.widths()
 	inner := w - 4
 
-	lines := []string{sectionTitle("SETTINGS", m.focus == paneConfig)}
+	// Top block: the option list, followed by a short description of the option
+	// under the cursor so the user can see what each setting does.
+	top := []string{sectionTitle("SETTINGS", m.focus == paneConfig)}
 
-	for i, spec := range m.visibleSpecs() {
-		lines = append(lines, m.optionRow(spec, i == m.optCursor, inner))
+	specs := m.visibleSpecs()
+	for i, spec := range specs {
+		top = append(top, m.optionRow(spec, i == m.optCursor, inner))
 	}
 
-	lines = append(lines, "", dimStyle.Render(strings.Repeat("─", inner)))
+	if m.optCursor < len(specs) {
+		top = append(top, "", dimStyle.Render(strings.Repeat("─", inner)))
+		for _, line := range wrap(specs[m.optCursor].desc, inner) {
+			top = append(top, labelStyle.Render(line))
+		}
+	}
 
-	lines = append(lines, dimStyle.Render("output  ")+truncate("→ "+prettyPath(m.dir), inner-8))
+	// Footer block: output location, what is queued, and the unsaved marker,
+	// pinned to the bottom so the panel reads as list-then-status.
+	footer := []string{dimStyle.Render(strings.Repeat("─", inner))}
+	footer = append(footer, dimStyle.Render("output  ")+truncate("→ "+prettyPath(m.dir), inner-8))
 
 	n := len(m.targets())
 	summary := fmt.Sprintf("%d file(s) queued", n)
 	if len(m.selected) == 0 && n == 1 {
 		summary = "1 file under the cursor"
 	}
-	lines = append(lines, dimStyle.Render("queue   ")+truncate(summary, inner-8))
+	footer = append(footer, dimStyle.Render("queue   ")+truncate(summary, inner-8))
 
 	if m.dirty {
-		lines = append(lines, warnStyle.Render("unsaved — press s to keep these"))
+		footer = append(footer, warnStyle.Render("unsaved — press s to keep these"))
 	}
 
-	return m.panel(lines, w, m.focus == paneConfig)
+	// Fit the top block into the space above the footer, then pad so the footer
+	// sits at the bottom of the fixed-height panel. When the option list is long
+	// the description is what gets dropped first, since it is only a hint.
+	avail := max(1, m.panelHeight()-len(footer))
+	if len(top) > avail {
+		top = top[:avail]
+	}
+	for len(top) < avail {
+		top = append(top, "")
+	}
+
+	return m.panel(append(top, footer...), w, m.focus == paneConfig)
 }
 
 func (m startModel) optionRow(spec optionSpec, atCursor bool, width int) string {
@@ -361,6 +383,35 @@ func truncate(s string, width int) string {
 		runes = runes[:len(runes)-1]
 	}
 	return string(runes) + "…"
+}
+
+// wrap greedily breaks s into lines no wider than width, splitting on spaces.
+// A single word longer than the line is hard-truncated with an ellipsis.
+func wrap(s string, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	var lines []string
+	line := ""
+	for _, word := range strings.Fields(s) {
+		switch {
+		case line == "":
+			line = word
+		case lipgloss.Width(line)+1+lipgloss.Width(word) <= width:
+			line += " " + word
+		default:
+			lines = append(lines, line)
+			line = word
+		}
+		if lipgloss.Width(line) > width {
+			lines = append(lines, truncate(line, width))
+			line = ""
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 // truncateLeft shortens s from the front, keeping its tail.
