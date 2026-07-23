@@ -57,9 +57,11 @@ func runStart(cmd *cobra.Command, dir string) error {
 		ctx = context.Background()
 	}
 
-	names := make([]string, 0, len(providers))
-	for _, p := range providers {
-		names = append(names, p.Name)
+	// The switcher only offers ready-to-use providers; fall back to the current
+	// one so the panel is never empty when nothing is configured yet.
+	names := configuredProviders(cfg)
+	if len(names) == 0 {
+		names = []string{cfg.Provider}
 	}
 
 	return tui.RunStart(ctx, tui.StartOptions{
@@ -81,7 +83,7 @@ func prepareRun(files []string, cfg config.Config, outDir string, force bool) (t
 		return nil, fmt.Errorf("invalid extract %q: use all, text or images", cfg.Extract)
 	}
 
-	conv, err := newConverter(cfg.Provider)
+	conv, err := converterFor(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -93,13 +95,7 @@ func prepareRun(files []string, cfg config.Config, outDir string, force bool) (t
 		}
 	}
 
-	return makeRunner(conv, files, converter.Request{
-		Extract:      extract,
-		Paginate:     cfg.Paginate,
-		ImageLimit:   cfg.ImageLimit,
-		ImageMinSize: cfg.ImageMinSize,
-		DeleteRemote: cfg.DeleteRemote,
-	}, opts), nil
+	return makeRunner(conv, files, reqFromConfig(cfg, extract), opts), nil
 }
 
 // destinationExists reports whether pdf would land on top of markdown that is

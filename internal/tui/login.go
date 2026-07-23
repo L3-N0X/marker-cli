@@ -9,48 +9,60 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/l3-n0x/marker-cli/internal/secrets"
 )
 
-// Validator checks an API key against the provider. It is injected so the
-// login model stays independent of any particular backend.
-type Validator func(ctx context.Context, apiKey string) error
+// Validator checks an entered value against a provider. It is injected so the
+// prompt model stays independent of any particular backend.
+type Validator func(ctx context.Context, value string) error
 
-// loginState is the step the sign-in flow is on.
-type loginState int
+// PromptConfig configures the interactive value prompt used for signing in: an
+// API key (hidden) or an endpoint (shown).
+type PromptConfig struct {
+	Title    string // e.g. "sign in to mistral"
+	Hint     string // a line under the title, e.g. where to get a key
+	Initial  string // prefilled value (endpoints)
+	Password bool   // hide the input (API keys)
+	Validate Validator
+}
+
+// promptState is the step the prompt flow is on.
+type promptState int
 
 const (
-	stateEntry loginState = iota
-	stateValidating
-	stateDone
+	promptEntry promptState = iota
+	promptValidating
+	promptDone
 )
 
-// validatedMsg carries the outcome of a key validation attempt.
+// validatedMsg carries the outcome of a validation attempt.
 type validatedMsg struct{ err error }
 
-type loginModel struct {
-	provider  string
-	keyURL    string
-	validate  Validator
+type promptModel struct {
+	cfg       PromptConfig
 	input     textinput.Model
 	spinner   spinner.Model
-	state     loginState
+	state     promptState
+	value     string
 	err       error
-	saved     bool
+	ok        bool
 	cancelled bool
 }
 
-// RunLogin shows the interactive sign-in flow for provider, validating the
-// entered key with validate before storing it in the OS keyring. It reports
-// whether a key was saved.
-func RunLogin(provider, keyURL string, validate Validator) (bool, error) {
+// RunPrompt shows an interactive prompt, validating the entered value before
+// returning it. It reports the value and whether the user confirmed it;
+// persisting the value is the caller's job.
+func RunPrompt(cfg PromptConfig) (string, bool, error) {
 	ti := textinput.New()
-	ti.Placeholder = "paste your API key"
-	ti.EchoMode = textinput.EchoPassword
-	ti.EchoCharacter = '•'
-	ti.CharLimit = 256
+	ti.CharLimit = 512
 	ti.SetWidth(48)
+	if cfg.Password {
+		ti.Placeholder = "paste your API key"
+		ti.EchoMode = textinput.EchoPassword
+		ti.EchoCharacter = '•'
+	} else {
+		ti.Placeholder = "host:port"
+		ti.SetValue(cfg.Initial)
+	}
 	styleInput(&ti)
 	ti.Focus()
 
@@ -58,38 +70,20 @@ func RunLogin(provider, keyURL string, validate Validator) (bool, error) {
 	sp.Spinner = spinner.Dot
 	sp.Style = titleStyle
 
-	m := loginModel{
-		provider: provider,
-		keyURL:   keyURL,
-		validate: validate,
-		input:    ti,
-		spinner:  sp,
-	}
-
-	final, err := tea.NewProgram(m).Run()
+	final, err := tea.NewProgram(promptModel{cfg: cfg, input: ti, spinner: sp}).Run()
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	result, ok := final.(loginModel)
-	if !ok {
-		return false, nil
+	m, ok := final.(promptModel)
+	if !ok || m.cancelled {
+		return "", false, nil
 	}
-	// Escaping out is a deliberate choice, not a failure — even if the last
-	// attempt was rejected, so don't report that stale error.
-	if result.cancelled {
-		return false, nil
-	}
-	if result.err != nil && !result.saved {
-		return false, result.err
-	}
-	return result.saved, nil
+	return m.value, m.ok, nil
 }
 
-func (m loginModel) Init() tea.Cmd {
-	return textinput.Blink
-}
+func (m promptModel) Init() tea.Cmd { return textinput.Blink }
 
-func (m loginModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m promptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -97,41 +91,33 @@ func (m loginModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelled = true
 			return m, tea.Quit
 		case "enter":
-			switch m.state {
-			case stateEntry:
-				key := strings.TrimSpace(m.input.Value())
-				if key == "" {
-					m.err = fmt.Errorf("please enter a key")
-					return m, nil
-				}
-				m.state = stateValidating
-				m.err = nil
-				return m, tea.Batch(m.spinner.Tick, validateCmd(m.validate, key))
-			case stateDone:
-				return m, tea.Quit
+			if m.state != promptEntry {
+				return m, nil
 			}
+			value := strings.TrimSpace(m.input.Value())
+			if value == "" {
+				m.err = fmt.Errorf("please enter a value")
+				return m, nil
+			}
+			m.state = promptValidating
+			m.err = nil
+			return m, tea.Batch(m.spinner.Tick, validateCmd(m.cfg.Validate, value))
 		}
 
 	case validatedMsg:
 		if msg.err != nil {
-			// Let the user correct the key instead of dropping them out.
-			m.state = stateEntry
+			m.state = promptEntry
 			m.err = msg.err
 			m.input.Focus()
 			return m, textinput.Blink
 		}
-		if err := secrets.Set(m.provider, strings.TrimSpace(m.input.Value())); err != nil {
-			m.state = stateEntry
-			m.err = err
-			m.input.Focus()
-			return m, textinput.Blink
-		}
-		m.state = stateDone
-		m.saved = true
+		m.value = strings.TrimSpace(m.input.Value())
+		m.ok = true
+		m.state = promptDone
 		return m, tea.Quit
 
 	case spinner.TickMsg:
-		if m.state == stateValidating {
+		if m.state == promptValidating {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
@@ -139,7 +125,7 @@ func (m loginModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.state == stateEntry {
+	if m.state == promptEntry {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -147,36 +133,106 @@ func (m loginModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m loginModel) View() tea.View {
+func (m promptModel) View() tea.View {
 	var b strings.Builder
-
-	fmt.Fprintf(&b, "%s\n\n", titleStyle.Render("marker-cli · sign in to "+m.provider))
-	if m.keyURL != "" {
-		fmt.Fprintf(&b, "%s\n\n", labelStyle.Render("Get a key at "+m.keyURL))
+	fmt.Fprintf(&b, "%s\n\n", titleStyle.Render("marker-cli · "+m.cfg.Title))
+	if m.cfg.Hint != "" {
+		fmt.Fprintf(&b, "%s\n\n", labelStyle.Render(m.cfg.Hint))
 	}
 
 	switch m.state {
-	case stateValidating:
-		fmt.Fprintf(&b, "%s checking the key…\n", m.spinner.View())
-	case stateDone:
-		fmt.Fprintf(&b, "%s\n", successStyle.Render("✓ key validated and saved to your OS keyring"))
+	case promptValidating:
+		fmt.Fprintf(&b, "%s checking…\n", m.spinner.View())
 	default:
 		fmt.Fprintf(&b, "%s\n", m.input.View())
 		if m.err != nil {
 			fmt.Fprintf(&b, "\n%s\n", errorStyle.Render("✗ "+m.err.Error()))
 		}
-		fmt.Fprintf(&b, "\n%s\n", helpStyle.Render("enter to continue · esc to cancel · input is hidden"))
+		hidden := ""
+		if m.cfg.Password {
+			hidden = " · input is hidden"
+		}
+		fmt.Fprintf(&b, "\n%s\n", helpStyle.Render("enter to continue · esc to cancel"+hidden))
 	}
-
 	return tea.NewView(b.String())
 }
 
 // validateCmd runs the validator off the update loop, as Bubble Tea requires
 // for anything slow.
-func validateCmd(validate Validator, key string) tea.Cmd {
+func validateCmd(validate Validator, value string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		return validatedMsg{err: validate(ctx, key)}
+		return validatedMsg{err: validate(ctx, value)}
 	}
+}
+
+// PickerItem is one choice in the provider picker.
+type PickerItem struct {
+	Label string
+	Desc  string
+}
+
+type pickerModel struct {
+	title     string
+	items     []PickerItem
+	cursor    int
+	chosen    int
+	confirmed bool
+	cancelled bool
+}
+
+// RunPicker shows a single-choice menu and returns the selected index. The
+// bool is false if the user cancelled.
+func RunPicker(title string, items []PickerItem) (int, bool, error) {
+	final, err := tea.NewProgram(pickerModel{title: title, items: items, chosen: -1}).Run()
+	if err != nil {
+		return 0, false, err
+	}
+	m, ok := final.(pickerModel)
+	if !ok || m.cancelled || !m.confirmed {
+		return 0, false, nil
+	}
+	return m.chosen, true, nil
+}
+
+func (m pickerModel) Init() tea.Cmd { return nil }
+
+func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "ctrl+c", "esc", "q":
+			m.cancelled = true
+			return m, tea.Quit
+		case "up", "k":
+			m.cursor = clamp(m.cursor-1, 0, len(m.items)-1)
+		case "down", "j":
+			m.cursor = clamp(m.cursor+1, 0, len(m.items)-1)
+		case "enter":
+			m.chosen = m.cursor
+			m.confirmed = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m pickerModel) View() tea.View {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", titleStyle.Render("marker-cli · "+m.title))
+	for i, it := range m.items {
+		cursor := "  "
+		label := it.Label
+		if i == m.cursor {
+			cursor = cursorStyle.Render("❯ ")
+			label = cursorStyle.Render(label)
+		}
+		line := cursor + label
+		if it.Desc != "" {
+			line += dimStyle.Render("  " + it.Desc)
+		}
+		fmt.Fprintf(&b, "%s\n", line)
+	}
+	fmt.Fprintf(&b, "\n%s\n", helpStyle.Render("↑↓ move · enter select · esc cancel"))
+	return tea.NewView(b.String())
 }

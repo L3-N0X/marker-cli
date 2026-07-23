@@ -26,7 +26,7 @@ func newTestModel(t *testing.T, opts StartOptions, files ...string) startModel {
 	}
 
 	opts.Dir = dir
-	if opts.Config == (config.Config{}) {
+	if opts.Config.Provider == "" {
 		opts.Config = config.Default()
 	}
 
@@ -206,7 +206,7 @@ func TestOptionLaddersAndExclusivity(t *testing.T) {
 	m.focus = paneConfig
 
 	// extract wraps through its three values.
-	m.optCursor = indexOfSpec("extract")
+	m.optCursor = indexOfSpec(m, "extract")
 	for _, want := range []string{"text", "images", "all"} {
 		m.adjustOption(1)
 		if m.cfg.Extract != want {
@@ -215,7 +215,7 @@ func TestOptionLaddersAndExclusivity(t *testing.T) {
 	}
 
 	// Numeric ladders clamp instead of wrapping.
-	m.optCursor = indexOfSpec("image-limit")
+	m.optCursor = indexOfSpec(m, "image-limit")
 	m.adjustOption(-1)
 	if m.cfg.ImageLimit != 0 {
 		t.Fatalf("image-limit = %d, want it clamped at 0", m.cfg.ImageLimit)
@@ -226,9 +226,9 @@ func TestOptionLaddersAndExclusivity(t *testing.T) {
 	}
 
 	// move-pdf and delete-original cannot both be on.
-	m.optCursor = indexOfSpec("move-pdf")
+	m.optCursor = indexOfSpec(m, "move-pdf")
 	m.adjustOption(1)
-	m.optCursor = indexOfSpec("delete-original")
+	m.optCursor = indexOfSpec(m, "delete-original")
 	m.adjustOption(1)
 	if !m.cfg.DeleteOriginal || m.cfg.MovePDF {
 		t.Fatalf("move-pdf=%v delete-original=%v, want only delete-original", m.cfg.MovePDF, m.cfg.DeleteOriginal)
@@ -242,7 +242,7 @@ func TestOffLadderValueSnapsToNearest(t *testing.T) {
 	cfg.ImageMinSize = 120
 
 	m := newTestModel(t, StartOptions{Config: cfg}, "a.pdf")
-	m.optCursor = indexOfSpec("image-min-size")
+	m.optCursor = indexOfSpec(m, "image-min-size")
 	m.adjustOption(1)
 
 	if m.cfg.ImageMinSize != 200 {
@@ -275,8 +275,69 @@ func TestDirectoryNavigation(t *testing.T) {
 	}
 }
 
-func indexOfSpec(key string) int {
-	for i, s := range optionSpecs {
+// TestProviderSwitchChangesSettings checks that the settings panel shows the
+// selected provider's own options, that switching provider swaps them, and that
+// the switcher only cycles the configured providers it was given.
+func TestProviderSwitchChangesSettings(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "mistral"
+	m := newTestModel(t, StartOptions{Config: cfg, Providers: []string{"mistral", "datalab"}}, "a.pdf")
+	m.focus = paneConfig
+
+	// MistralAI shows image-limit but not Datalab's langs/max-pages.
+	if indexOfSpec(m, "image-limit") < 0 {
+		t.Fatal("mistral should show image-limit")
+	}
+	if indexOfSpec(m, "langs") >= 0 {
+		t.Fatal("mistral should not show langs")
+	}
+
+	// Step the provider selector to datalab.
+	m.optCursor = indexOfSpec(m, "provider")
+	m.adjustOption(1)
+	if m.cfg.Provider != "datalab" {
+		t.Fatalf("provider = %q, want datalab", m.cfg.Provider)
+	}
+	if indexOfSpec(m, "langs") < 0 || indexOfSpec(m, "max-pages") < 0 {
+		t.Fatal("datalab should show langs and max-pages")
+	}
+	if indexOfSpec(m, "image-limit") >= 0 {
+		t.Fatal("datalab should not show image-limit")
+	}
+
+	// Stepping again wraps back to mistral: only the two configured providers
+	// are in the ladder, never the unconfigured ones.
+	m.optCursor = indexOfSpec(m, "provider")
+	m.adjustOption(1)
+	if m.cfg.Provider != "mistral" {
+		t.Fatalf("provider wrapped to %q, want mistral", m.cfg.Provider)
+	}
+}
+
+// TestInlineEditSetsStringOption walks the inline editor for a free-text
+// setting.
+func TestInlineEditSetsStringOption(t *testing.T) {
+	cfg := config.Default()
+	cfg.Provider = "datalab"
+	m := newTestModel(t, StartOptions{Config: cfg, Providers: []string{"datalab"}}, "a.pdf")
+	m.focus = paneConfig
+
+	m.optCursor = indexOfSpec(m, "langs")
+	next, _ := m.editOption(m.visibleSpecs()[m.optCursor])
+	m = next.(startModel)
+	if !m.stateIs(stateEditOption) {
+		t.Fatalf("state = %v, want edit-option", m.st)
+	}
+
+	m.optEdit.SetValue("de,fr")
+	m.commitOptionEdit()
+	if m.cfg.Langs != "de,fr" {
+		t.Fatalf("langs = %q, want de,fr", m.cfg.Langs)
+	}
+}
+
+func indexOfSpec(m startModel, key string) int {
+	for i, s := range m.visibleSpecs() {
 		if s.key == key {
 			return i
 		}

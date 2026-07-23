@@ -170,7 +170,7 @@ func (m startModel) configPanel() string {
 
 	lines := []string{sectionTitle("SETTINGS", m.focus == paneConfig)}
 
-	for i, spec := range optionSpecs {
+	for i, spec := range m.visibleSpecs() {
 		lines = append(lines, m.optionRow(spec, i == m.optCursor, inner))
 	}
 
@@ -301,6 +301,9 @@ func (m startModel) statusLine() string {
 	if m.st == stateFilter {
 		return keyStyle.Render("filter: ") + m.filter.View()
 	}
+	if m.st == stateEditOption {
+		return keyStyle.Render(m.editing.key+": ") + m.optEdit.View()
+	}
 	if m.status == "" {
 		return ""
 	}
@@ -318,6 +321,8 @@ func (m startModel) helpLine() string {
 		segs = []string{"type to filter", "enter apply", "esc clear"}
 	case stateFolder:
 		segs = []string{"enter convert into folder", "esc cancel"}
+	case stateEditOption:
+		segs = []string{"enter save", "esc cancel"}
 	case stateRunning:
 		segs = []string{"esc cancel"}
 	case stateResults:

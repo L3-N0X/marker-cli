@@ -14,23 +14,32 @@ import (
 	"github.com/l3-n0x/marker-cli/internal/config"
 	"github.com/l3-n0x/marker-cli/internal/converter"
 	"github.com/l3-n0x/marker-cli/internal/output"
+	"github.com/l3-n0x/marker-cli/internal/provider"
 	"github.com/l3-n0x/marker-cli/internal/tui"
 )
 
 type convertFlags struct {
-	inputs       []string
-	outputPath   string
-	provider     string
-	extract      string
-	paginate     bool
-	imageLimit   int
-	imageMinSize int
-	assets       bool
-	metadata     bool
-	movePDF      bool
-	deleteOrig   bool
-	deleteRemote bool
-	force        bool
+	inputs         []string
+	outputPath     string
+	provider       string
+	extract        string
+	paginate       bool
+	langs          string
+	forceOCR       bool
+	maxPages       int
+	stripOCR       bool
+	useLLM         bool
+	skipCache      bool
+	imageLimit     int
+	imageMinSize   int
+	markerEndpoint string
+	pythonEndpoint string
+	assets         bool
+	metadata       bool
+	movePDF        bool
+	deleteOrig     bool
+	deleteRemote   bool
+	force          bool
 }
 
 func newConvertCmd() *cobra.Command {
@@ -62,16 +71,24 @@ func newConvertCmd() *cobra.Command {
 	fl := cmd.Flags()
 	fl.StringArrayVarP(&f.inputs, "input", "i", nil, "PDF to convert (repeat for several)")
 	fl.StringVarP(&f.outputPath, "output", "o", ".", "output directory, or a path ending in .md")
-	fl.StringVar(&f.provider, "provider", defaults.Provider, "OCR backend to use ("+providerNames()+")")
+	fl.StringVar(&f.provider, "provider", defaults.Provider, "OCR backend to use ("+provider.Names()+")")
 	fl.StringVar(&f.extract, "extract", defaults.Extract, "what to extract: all, text or images")
 	fl.BoolVar(&f.paginate, "paginate", defaults.Paginate, "insert a horizontal rule between pages")
-	fl.IntVar(&f.imageLimit, "image-limit", defaults.ImageLimit, "maximum images to extract (0 = no limit)")
-	fl.IntVar(&f.imageMinSize, "image-min-size", defaults.ImageMinSize, "minimum image width/height to extract (0 = no minimum)")
+	fl.StringVar(&f.langs, "langs", defaults.Langs, "OCR languages, comma-separated (datalab, python-*)")
+	fl.BoolVar(&f.forceOCR, "force-ocr", defaults.ForceOCR, "force OCR instead of auto-detect (datalab, python-*)")
+	fl.IntVar(&f.maxPages, "max-pages", defaults.MaxPages, "limit pages to convert, 0 = all (datalab)")
+	fl.BoolVar(&f.stripOCR, "strip-existing-ocr", defaults.StripExistingOCR, "remove existing OCR text and re-run (datalab)")
+	fl.BoolVar(&f.useLLM, "use-llm", defaults.UseLLM, "LLM enhancement, doubles cost (datalab)")
+	fl.BoolVar(&f.skipCache, "skip-cache", defaults.SkipCache, "skip cached results (datalab)")
+	fl.IntVar(&f.imageLimit, "image-limit", defaults.ImageLimit, "maximum images to extract, 0 = no limit (mistral)")
+	fl.IntVar(&f.imageMinSize, "image-min-size", defaults.ImageMinSize, "minimum image width/height to extract, 0 = no minimum (mistral)")
+	fl.StringVar(&f.markerEndpoint, "marker-endpoint", defaults.MarkerEndpoint, "self-hosted Marker API endpoint (selfhosted)")
+	fl.StringVar(&f.pythonEndpoint, "python-endpoint", defaults.PythonEndpoint, "Python Marker API endpoint (python-*)")
 	fl.BoolVar(&f.assets, "assets-subfolder", defaults.AssetsSubfolder, "put images in a separate assets folder")
 	fl.BoolVar(&f.metadata, "metadata", defaults.Metadata, "write metadata as YAML frontmatter")
 	fl.BoolVar(&f.movePDF, "move-pdf", defaults.MovePDF, "move the source PDF next to the markdown")
 	fl.BoolVar(&f.deleteOrig, "delete-original", defaults.DeleteOriginal, "delete the source PDF after conversion")
-	fl.BoolVar(&f.deleteRemote, "delete-remote", defaults.DeleteRemote, "delete the uploaded file from the provider afterwards")
+	fl.BoolVar(&f.deleteRemote, "delete-remote", defaults.DeleteRemote, "delete the uploaded file from the provider afterwards (mistral)")
 	fl.BoolVar(&f.force, "force", false, "overwrite existing markdown files")
 
 	return cmd
@@ -91,7 +108,8 @@ func runConvert(cmd *cobra.Command, f *convertFlags) error {
 		return err
 	}
 
-	conv, err := newConverter(f.provider)
+	cfg := f.toConfig()
+	conv, err := converterFor(cfg)
 	if err != nil {
 		return err
 	}
@@ -113,13 +131,7 @@ func runConvert(cmd *cobra.Command, f *convertFlags) error {
 		}
 	}
 
-	run := makeRunner(conv, inputs, converter.Request{
-		Extract:      extract,
-		Paginate:     f.paginate,
-		ImageLimit:   f.imageLimit,
-		ImageMinSize: f.imageMinSize,
-		DeleteRemote: f.deleteRemote,
-	}, opts)
+	run := makeRunner(conv, inputs, reqFromConfig(cfg, extract), opts)
 
 	names := make([]string, len(inputs))
 	for i, in := range inputs {
@@ -154,6 +166,31 @@ func runConvert(cmd *cobra.Command, f *convertFlags) error {
 		return errors.New("cancelled")
 	}
 	return nil
+}
+
+// toConfig folds the convert flags into a Config, so the shared converter and
+// request builders can be reused between `convert` and the interactive UI.
+func (f *convertFlags) toConfig() config.Config {
+	return config.Config{
+		Provider:         f.provider,
+		Extract:          f.extract,
+		AssetsSubfolder:  f.assets,
+		Metadata:         f.metadata,
+		MovePDF:          f.movePDF,
+		DeleteOriginal:   f.deleteOrig,
+		MarkerEndpoint:   f.markerEndpoint,
+		PythonEndpoint:   f.pythonEndpoint,
+		Paginate:         f.paginate,
+		Langs:            f.langs,
+		ForceOCR:         f.forceOCR,
+		MaxPages:         f.maxPages,
+		StripExistingOCR: f.stripOCR,
+		UseLLM:           f.useLLM,
+		SkipCache:        f.skipCache,
+		ImageLimit:       f.imageLimit,
+		ImageMinSize:     f.imageMinSize,
+		DeleteRemote:     f.deleteRemote,
+	}
 }
 
 // makeRunner builds the unit of work the progress view drives: convert

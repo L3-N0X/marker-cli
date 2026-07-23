@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/l3-n0x/marker-cli/internal/config"
+	"github.com/l3-n0x/marker-cli/internal/provider"
 )
 
 // StartOptions injects everything the browser needs from the command layer, so
@@ -41,6 +42,7 @@ const (
 	stateBrowse startState = iota
 	stateFilter
 	stateFolder
+	stateEditOption
 	stateRunning
 	stateResults
 )
@@ -82,6 +84,8 @@ type startModel struct {
 
 	filter  textinput.Model
 	folder  textinput.Model
+	optEdit textinput.Model // inline editor for free-text settings
+	editing optionSpec      // the setting being edited in stateEditOption
 	loadErr error
 
 	status    string
@@ -124,6 +128,10 @@ func newStartModel(ctx context.Context, opts StartOptions) (startModel, error) {
 	folder.SetWidth(36)
 	styleInput(&folder)
 
+	optEdit := textinput.New()
+	optEdit.SetWidth(36)
+	styleInput(&optEdit)
+
 	m := startModel{
 		opts:       opts,
 		ctx:        ctx,
@@ -131,6 +139,7 @@ func newStartModel(ctx context.Context, opts StartOptions) (startModel, error) {
 		dir:        dir,
 		filter:     filter,
 		folder:     folder,
+		optEdit:    optEdit,
 		listHeight: 10,
 	}
 	m.reload()
@@ -226,6 +235,22 @@ func (m startModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.folder, cmd = m.folder.Update(msg)
+		return m, cmd
+
+	case stateEditOption:
+		switch key {
+		case "esc":
+			m.optEdit.Blur()
+			m.state(stateBrowse)
+			return m, nil
+		case "enter":
+			m.commitOptionEdit()
+			m.optEdit.Blur()
+			m.state(stateBrowse)
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.optEdit, cmd = m.optEdit.Update(msg)
 		return m, cmd
 
 	case stateRunning:
@@ -344,6 +369,10 @@ func (m startModel) filesKey(key string) (tea.Model, tea.Cmd) {
 func (m startModel) configKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "space", "enter":
+		specs := m.visibleSpecs()
+		if m.optCursor < len(specs) && specs[m.optCursor].kind == optString {
+			return m.editOption(specs[m.optCursor])
+		}
 		m.adjustOption(1)
 	case "s":
 		if m.opts.Save == nil {
@@ -363,6 +392,27 @@ func (m startModel) configKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// editOption opens the inline editor for a free-text setting, prefilled with its
+// current value.
+func (m startModel) editOption(spec optionSpec) (tea.Model, tea.Cmd) {
+	m.editing = spec
+	m.optEdit.SetValue(m.optionValue(spec))
+	m.optEdit.CursorEnd()
+	m.optEdit.Focus()
+	m.state(stateEditOption)
+	return m, textinput.Blink
+}
+
+// commitOptionEdit stores the edited value back into the config.
+func (m *startModel) commitOptionEdit() {
+	value := strings.TrimSpace(m.optEdit.Value())
+	if value == "" {
+		// Keep the previous value rather than blanking an endpoint or langs.
+		return
+	}
+	m.setOptionValue(m.editing, value)
+}
+
 // delta maps a horizontal key to a step through an option's values.
 func delta(key string) int {
 	if key == "left" || key == "h" {
@@ -374,7 +424,7 @@ func delta(key string) int {
 // move walks the cursor of the focused panel and keeps the scroll window on it.
 func (m *startModel) move(n int) {
 	if m.focus == paneConfig {
-		m.optCursor = clamp(m.optCursor+n, 0, len(optionSpecs)-1)
+		m.optCursor = clamp(m.optCursor+n, 0, len(m.visibleSpecs())-1)
 		return
 	}
 	m.cursor = clamp(m.cursor+n, 0, len(m.entries)-1)
@@ -627,11 +677,12 @@ const (
 	optBool optionKind = iota
 	optEnum
 	optInt
+	optString
 )
 
-// optionSpec describes one row of the settings panel. Every option steps
-// through a fixed ladder of values, so ← and → are always meaningful and no
-// value can ever be invalid.
+// optionSpec describes one row of the settings panel. Ladder options (bool,
+// enum, int) step through a fixed set of values, so ← and → are always
+// meaningful; string options are edited inline instead.
 type optionSpec struct {
 	key    string
 	desc   string
@@ -641,21 +692,70 @@ type optionSpec struct {
 	session bool
 }
 
-var optionSpecs = []optionSpec{
-	{key: "provider", desc: "OCR backend", kind: optEnum},
-	{key: "extract", desc: "what to pull out of the PDF", kind: optEnum, values: []string{"all", "text", "images"}},
-	{key: "paginate", desc: "rule between pages", kind: optBool},
-	{key: "image-limit", desc: "max images (0 = all)", kind: optInt, values: []string{"0", "1", "2", "5", "10", "20", "50", "100"}},
-	{key: "image-min-size", desc: "skip images smaller than", kind: optInt, values: []string{"0", "50", "100", "200", "300", "500", "1000"}},
-	{key: "assets-subfolder", desc: "images in their own folder", kind: optBool},
-	{key: "metadata", desc: "YAML frontmatter", kind: optBool},
-	{key: "move-pdf", desc: "move the PDF next to the markdown", kind: optBool},
-	{key: "delete-original", desc: "delete the PDF afterwards", kind: optBool},
-	{key: "delete-remote", desc: "delete the upload afterwards", kind: optBool},
-	{key: "force", desc: "overwrite existing markdown", kind: optBool, session: true},
+// specByKey is the master registry of every option the panel can show. The
+// visible list is assembled per provider in visibleSpecs.
+var specByKey = map[string]optionSpec{
+	"provider":           {key: "provider", desc: "OCR backend", kind: optEnum},
+	"extract":            {key: "extract", desc: "what to pull out of the PDF", kind: optEnum, values: []string{"all", "text", "images"}},
+	"marker-endpoint":    {key: "marker-endpoint", desc: "self-hosted Marker API address", kind: optString},
+	"python-endpoint":    {key: "python-endpoint", desc: "Python Marker API address", kind: optString},
+	"langs":              {key: "langs", desc: "OCR languages, comma-separated", kind: optString},
+	"force-ocr":          {key: "force-ocr", desc: "force OCR instead of auto-detect", kind: optBool},
+	"paginate":           {key: "paginate", desc: "rule between pages", kind: optBool},
+	"max-pages":          {key: "max-pages", desc: "page limit (0 = all)", kind: optInt, values: []string{"0", "5", "10", "25", "50", "100"}},
+	"strip-existing-ocr": {key: "strip-existing-ocr", desc: "re-run OCR over existing text", kind: optBool},
+	"use-llm":            {key: "use-llm", desc: "LLM enhancement (doubles cost)", kind: optBool},
+	"skip-cache":         {key: "skip-cache", desc: "ignore cached results", kind: optBool},
+	"image-limit":        {key: "image-limit", desc: "max images (0 = all)", kind: optInt, values: []string{"0", "1", "2", "5", "10", "20", "50", "100"}},
+	"image-min-size":     {key: "image-min-size", desc: "skip images smaller than", kind: optInt, values: []string{"0", "50", "100", "200", "300", "500", "1000"}},
+	"delete-remote":      {key: "delete-remote", desc: "delete the upload afterwards", kind: optBool},
+	"assets-subfolder":   {key: "assets-subfolder", desc: "images in their own folder", kind: optBool},
+	"metadata":           {key: "metadata", desc: "YAML frontmatter", kind: optBool},
+	"move-pdf":           {key: "move-pdf", desc: "move the PDF next to the markdown", kind: optBool},
+	"delete-original":    {key: "delete-original", desc: "delete the PDF afterwards", kind: optBool},
+	"force":              {key: "force", desc: "overwrite existing markdown", kind: optBool, session: true},
+}
+
+// generalOptionKeys are the settings every backend supports, shown below the
+// provider's own settings.
+var generalOptionKeys = []string{"extract", "assets-subfolder", "metadata", "move-pdf", "delete-original"}
+
+// visibleSpecs is the ordered list of options for the current provider: the
+// provider selector, then that provider's backend-specific settings, then the
+// general settings, then the session-only force toggle.
+func (m startModel) visibleSpecs() []optionSpec {
+	keys := []string{"provider"}
+	if p, err := provider.Lookup(m.cfg.Provider); err == nil {
+		keys = append(keys, p.Settings...)
+	}
+	keys = append(keys, generalOptionKeys...)
+	keys = append(keys, "force")
+
+	specs := make([]optionSpec, 0, len(keys))
+	for _, k := range keys {
+		if spec, ok := specByKey[k]; ok {
+			specs = append(specs, spec)
+		}
+	}
+	return specs
 }
 
 var boolValues = []string{"false", "true"}
+
+// providerChoices are the names the provider selector cycles through: the
+// configured providers, plus the current one so its settings always render.
+func (m startModel) providerChoices() []string {
+	list := m.opts.Providers
+	if len(list) == 0 {
+		return []string{m.cfg.Provider}
+	}
+	for _, n := range list {
+		if n == m.cfg.Provider {
+			return list
+		}
+	}
+	return append([]string{m.cfg.Provider}, list...)
+}
 
 // choices returns the ladder for spec, resolving the runtime-dependent ones.
 func (m startModel) choices(spec optionSpec) []string {
@@ -663,10 +763,7 @@ func (m startModel) choices(spec optionSpec) []string {
 	case spec.kind == optBool:
 		return boolValues
 	case spec.key == "provider":
-		if len(m.opts.Providers) == 0 {
-			return []string{m.cfg.Provider}
-		}
-		return m.opts.Providers
+		return m.providerChoices()
 	default:
 		return spec.values
 	}
@@ -679,8 +776,24 @@ func (m startModel) optionValue(spec optionSpec) string {
 		return c.Provider
 	case "extract":
 		return c.Extract
+	case "marker-endpoint":
+		return c.MarkerEndpoint
+	case "python-endpoint":
+		return c.PythonEndpoint
+	case "langs":
+		return c.Langs
+	case "force-ocr":
+		return strconv.FormatBool(c.ForceOCR)
 	case "paginate":
 		return strconv.FormatBool(c.Paginate)
+	case "max-pages":
+		return strconv.Itoa(c.MaxPages)
+	case "strip-existing-ocr":
+		return strconv.FormatBool(c.StripExistingOCR)
+	case "use-llm":
+		return strconv.FormatBool(c.UseLLM)
+	case "skip-cache":
+		return strconv.FormatBool(c.SkipCache)
 	case "image-limit":
 		return strconv.Itoa(c.ImageLimit)
 	case "image-min-size":
@@ -710,8 +823,24 @@ func (m *startModel) setOptionValue(spec optionSpec, v string) {
 		m.cfg.Provider = v
 	case "extract":
 		m.cfg.Extract = v
+	case "marker-endpoint":
+		m.cfg.MarkerEndpoint = v
+	case "python-endpoint":
+		m.cfg.PythonEndpoint = v
+	case "langs":
+		m.cfg.Langs = v
+	case "force-ocr":
+		m.cfg.ForceOCR = b
 	case "paginate":
 		m.cfg.Paginate = b
+	case "max-pages":
+		m.cfg.MaxPages = n
+	case "strip-existing-ocr":
+		m.cfg.StripExistingOCR = b
+	case "use-llm":
+		m.cfg.UseLLM = b
+	case "skip-cache":
+		m.cfg.SkipCache = b
 	case "image-limit":
 		m.cfg.ImageLimit = n
 	case "image-min-size":
@@ -743,12 +872,17 @@ func (m *startModel) setOptionValue(spec optionSpec, v string) {
 }
 
 // adjustOption steps the option under the config cursor by n. Booleans and
-// enums wrap around; numeric ladders clamp at their ends.
+// enums wrap around; numeric ladders clamp at their ends; string options are
+// edited inline and ignore stepping.
 func (m *startModel) adjustOption(n int) {
-	if m.optCursor >= len(optionSpecs) {
+	specs := m.visibleSpecs()
+	if m.optCursor >= len(specs) {
 		return
 	}
-	spec := optionSpecs[m.optCursor]
+	spec := specs[m.optCursor]
+	if spec.kind == optString {
+		return
+	}
 	values := m.choices(spec)
 	if len(values) == 0 {
 		return
@@ -768,6 +902,12 @@ func (m *startModel) adjustOption(n int) {
 		i = ((i+n)%len(values) + len(values)) % len(values)
 	}
 	m.setOptionValue(spec, values[i])
+
+	// Switching provider changes which settings are visible; keep the cursor
+	// in range.
+	if spec.key == "provider" {
+		m.optCursor = clamp(m.optCursor, 0, len(m.visibleSpecs())-1)
+	}
 }
 
 func indexOf(values []string, v string) int {

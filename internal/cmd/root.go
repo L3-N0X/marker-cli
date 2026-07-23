@@ -20,10 +20,12 @@ var (
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "marker-cli",
-		Short: "Convert PDFs to Markdown with MistralAI OCR",
-		Long: "marker-cli converts PDFs to Markdown, tables, formulas and images included.\n\n" +
-			"Run `marker-cli login` once to store your API key in the OS keyring, then\n" +
-			"either `marker-cli start` to pick files in a full-screen UI, or\n" +
+		Short: "Convert PDFs to Markdown with MistralAI, Datalab, self-hosted Marker or the Python API",
+		Long: "marker-cli converts PDFs to Markdown, tables, formulas and images included,\n" +
+			"using any of several backends: MistralAI OCR, Datalab, a self-hosted Marker\n" +
+			"API, or the Marker Python API.\n\n" +
+			"Run `marker-cli login` once to pick and set up a provider, then either\n" +
+			"`marker-cli start` to pick files in a full-screen UI, or\n" +
 			"`marker-cli convert -i doc.pdf -o out/` for a one-shot conversion.\n" +
 			"A bare `marker-cli` in a terminal opens the UI.",
 		Version:       version,

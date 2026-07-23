@@ -25,6 +25,7 @@ var ErrNoKey = errors.New("no API key found")
 // fallback when the keyring has no entry.
 var envVars = map[string]string{
 	"mistral": "MISTRAL_API_KEY",
+	"datalab": "DATALAB_API_KEY",
 }
 
 // Get returns the API key for provider, preferring the OS keyring and falling
